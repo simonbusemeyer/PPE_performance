@@ -1,0 +1,169 @@
+---
+title: "PPE Performance Report"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    code-fold: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(tidyverse)
+library(scales)
+library(here)
+
+# Source plotting functions using project-root absolute paths
+source(here("current", "plots", "ecr_graph_function.R"))
+source(here("current", "plots", "absolute_bias_graph_function.R"))
+source(here("current", "plots", "bias_graph_function.R"))
+source(here("current", "plots", "rmse_graph_function.R"))
+source(here("current", "plots", "PPviz_parallel_function.R"))
+source(here("current", "plots", "estimate_sd_graph_function.R"))
+source(here("current", "plots", "estimation_error_sd_graph_function.R"))
+source(here("current", "plots", "mean_se_graph_function.R"))
+source(here("current", "plots", "variance_calibration_graph_function.R"))
+
+results_df <- read_csv(here("current", "outputs", "tables", "final_results_complete.csv"))
+
+save_dir <- here("current", "outputs", "plots_data")
+
+# Extract global parameters dynamically from main_batch.R
+batch_code <- readLines(here("current", "main_batch.R"))
+
+get_param <- function(param_name, code = batch_code) {
+  line <- code[str_detect(code, paste0("^", param_name, "\\s*<-"))]
+  if(length(line) > 0) {
+    # Extract everything after <- and strip comments/whitespace
+    val <- str_match(line, paste0("^", param_name, "\\s*<-\\s*([^#]+)"))[2]
+    return(str_trim(val))
+  }
+  return("Not found")
+}
+
+# Store parameters in a list
+params_list <- list(
+  n_patients     = get_param("n_patients"),
+  age_option     = get_param("age_option"),
+  beta_age       = get_param("beta_age"),
+  beta_sex       = get_param("beta_sex"),
+  year_min       = get_param("year.start_min"),
+  year_max       = get_param("year.start_max"),
+  prop_female    = get_param("prop_female"),
+  N_files        = get_param("N_files"),
+  max_time       = get_param("max_time")
+)
+
+# Check if the generated data already exists
+generated_files <- list.files(save_dir, pattern = "^ppviz_data_lambda_.*\\.rds$")
+
+if (length(generated_files) == 0) {
+  message("Pre-computed plots not found. Running parallel pre-computation...")
+  source(here("current", "plots", "precompute_viz_data.R")) 
+} else {
+  message("Pre-computed data already exists. Skipping pre-computation step.")
+}
+```
+## Simulation Configuration
+
+> **Note:** This report reflects the performance metrics evaluated for the following simulation configuration:
+
+* **Number of Patients ($N$):** `r params_list$n_patients`
+* **Simulated Cohorts (Files):** `r params_list$N_files`
+* **Follow-up Cutoff (Years):** `r params_list$max_time` years
+* **Age Distribution Cohort:** `r params_list$age_option`
+* **Beta Coefficients:** * Age ($\beta_{age}$): `r params_list$beta_age`
+    * Sex ($\beta_{sex}$): `r params_list$beta_sex`
+* **Inclusion Window:** `r params_list$year_min` to `r params_list$year_max`
+* **Female Proportion:** `r params_list$prop_female`
+
+## Empirical Coverage
+
+```{r fig-ecr-coverage, fig.width=9, fig.height=6, fig.cap="PPE empirical coverage under competing risks."}
+plot_ecr(results_df)
+```
+
+
+## Absolute Bias
+
+```{r fig-absolute-bias, fig.width=9, fig.height=6, fig.cap="PPE bias under competing risks."}
+plot_absolute_bias(results_df)
+```
+
+
+## Bias
+
+```{r fig-bias, fig.width=9, fig.height=6, fig.cap="PPE bias under competing risks."}
+plot_bias(results_df)
+```
+
+
+## Root Mean Square Error
+
+```{r fig-rmse, fig.width=9, fig.height=6, fig.cap="PPE root mean square error under competing risks."}
+plot_rmse(results_df)
+```
+
+## Variance
+
+```{r fig-dispersion, fig.width=9, fig.height=6, fig.cap="PPE empirical dispersion under competing risks."}
+plot_estimate_sd(results_df)
+```
+```{r fig-estimation-error, fig.width=9, fig.height=6, fig.cap="PPE empirical dispersion under competing risks."}
+plot_estimation_error_sd(results_df)
+```
+
+```{r fig-mean-sd, fig.width=9, fig.height=6, fig.cap="PPE mean estimated standard error under competing risks."}
+plot_mean_se(results_df)
+```
+
+```{r fig-variance-calibration, fig.width=9, fig.height=6, fig.cap="Ratio of mean model estimated SE to empirical SD of the estimation error (bias)"}
+plot_variance_calibration(results_df)
+```
+
+## Pohar-Perme Visualization by Lambda Scenario
+
+```{r fig-ppviz-all-lambdas, fig.width=9, fig.height=6, fig.cap="Pohar-Perme versus theoretical net survival by lambda scenario.", echo=FALSE}
+#| layout-ncol: 1
+
+target_dir <- here("current", "outputs", "plots_data")
+
+plot_files <- sort(list.files(target_dir, pattern = "^ppviz_data_lambda_.*\\.rds$", full.names = TRUE))
+
+if (length(plot_files) == 0) {
+  stop("Error: No pre-computed .rds plot files found in ", target_dir)
+}
+
+for (p_file in plot_files) {
+  p <- readRDS(p_file)
+  
+  plot(
+    0, type = "n", xlim = c(0, max(p$t_seq_years)), ylim = c(0.8, 1.0),
+    xlab = "Time since diagnosis (Years)", ylab = "Net Survival Probability",
+    main = paste0("Net Survival: PP vs Theoretical\nLambda = ", sprintf("%.4f", p$lambda), 
+                  "; Proportion of deaths due to cancer: ", p$pct_cancer, "%")
+  )
+  grid()
+  
+  # Plot individual sampled runs
+  n_cols <- ncol(p$pp_surv_matrix)
+  sampled_cols <- sample(seq_len(n_cols), size = min(20, n_cols))
+  for (i in sampled_cols) {
+    lines(p$t_seq_years, p$pp_surv_matrix[, i], col = rgb(0.2, 0.5, 0.8, alpha = 0.3), lwd = 1, type = "s")
+  }
+  
+  # Plot mean and theoretical curves
+  lines(p$t_seq_years, p$mean_pp_surv, col = "red", lwd = 3, type = "l")
+  lines(p$t_seq_years, p$surv_theo_mean, col = "black", lwd = 3, lty = 2)
+  
+  legend("bottomleft",
+    legend = c(paste0("Individual PP Estimates (N = ", length(sampled_cols), ")"),
+               "Mean PP Estimate", "Theoretical Net Survival Curve S(t)"),
+    col = c(rgb(0.2, 0.5, 0.8, alpha = 0.5), "red", "black"),
+    lwd = c(2, 3, 3), lty = c(1, 1, 2), bty = "n", cex = 0.85
+  )
+}
+```

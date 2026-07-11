@@ -1,0 +1,69 @@
+---
+title: "PPE Performance Report"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    code-fold: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(tidyverse)
+library(scales)
+library(here)
+
+source(here("current", "plots", "risk_set_diagnostics", "composition.R"))
+
+results_df <- read_csv(here("current", "outputs", "tables", "final_results_complete.csv"))
+
+metrics <- readRDS(here("current", "outputs", "tables", "final_results_complete.rds"))
+
+# Extract global parameters dynamically from main_batch.R
+batch_code <- readLines(here("current", "main_batch.R"))
+
+get_param <- function(param_name, code = batch_code) {
+  line <- code[str_detect(code, paste0("^", param_name, "\\s*<-"))]
+  if(length(line) > 0) {
+    # Extract everything after <- and strip comments/whitespace
+    val <- str_match(line, paste0("^", param_name, "\\s*<-\\s*([^#]+)"))[2]
+    return(str_trim(val))
+  }
+  return("Not found")
+}
+
+# Store parameters in a list
+params_list <- list(
+  n_patients     = get_param("n_patients"),
+  age_option     = get_param("age_option"),
+  beta_age       = get_param("beta_age"),
+  beta_sex       = get_param("beta_sex"),
+  year_min       = get_param("year.start_min"),
+  year_max       = get_param("year.start_max"),
+  prop_female    = get_param("prop_female"),
+  N_files        = get_param("N_files"),
+  max_time       = get_param("max_time")
+)
+```
+
+## Simulation Configuration
+
+> **Note:** This report reflects risk-set diagnostics to check whether variability comes from effective sample size issues.
+
+* **Number of Patients ($N$):** `r params_list$n_patients`
+* **Simulated Cohorts (Files):** `r params_list$N_files`
+* **Follow-up Cutoff (Years):** `r params_list$max_time` years
+* **Age Distribution Cohort:** `r params_list$age_option`
+* **Beta Coefficients:** * Age ($\beta_{age}$): `r params_list$beta_age`
+    * Sex ($\beta_{sex}$): `r params_list$beta_sex`
+* **Inclusion Window:** `r params_list$year_min` to `r params_list$year_max`
+* **Female Proportion:** `r params_list$prop_female`
+
+## Cohort Composition across pct_cancer (Stacked Bar Chart)
+
+```{r fig-cohort-comp, fig.width=9, fig.height=6}
+plot_composition(results_df)
+```

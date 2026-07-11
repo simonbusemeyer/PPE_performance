@@ -1,0 +1,254 @@
+---
+title: "PPE Performance Report"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    code-fold: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+library(tidyverse)
+library(scales)
+library(here)
+library(ggplot2)
+library(data.table)
+library(patchwork)
+
+source(here("current", "plots", "age_stratified_estimate_plots", "bias_age_strata.R"))
+source(here("current", "plots", "age_stratified_estimate_plots", "ecr_age_strata.R"))
+source(here("current", "plots", "age_stratified_estimate_plots", "mean_se_age_strata.R"))
+source(here("current", "plots", "age_stratified_estimate_plots", "estimate_sd_age_strata.R"))
+source(here("current", "plots", "age_stratified_estimate_plots", "variance_calibration_age_strata.R"))
+source(here("current", "plots", "age_stratified_estimate_plots", "cancer_deaths_age_strata.R"))
+
+# Cumulative Representations by Age Strata(proportion)
+source(here("current", "plots", "final_report", "cum_cancer_prop_age_strata.R"))
+source(here("current", "plots", "final_report", "n_at_risk_prop_age_strata.R"))
+source(here("current", "plots", "final_report", "cum_total_deaths_prop_age_strata.R"))
+source(here("current", "plots", "final_report", "cum_other_prop_age_strata.R"))
+
+## # Cumulative Representations by Age Strata (absolute)
+source(here("current", "plots", "final_report", "cum_cancer_age_strata.R"))
+source(here("current", "plots", "final_report", "n_at_risk_age_strata.R"))
+source(here("current", "plots", "final_report", "cum_total_deaths_age_strata.R"))
+source(here("current", "plots", "final_report", "cum_other_age_strata.R"))
+
+# Other plots
+source(here("current", "plots", "age_stratified_estimate_plots", "sd_risk_age_strata.R"))
+source(here("current", "plots", "age_stratified_estimate_plots", "PPviz_parallel_function_age_strata.R"))
+source(here("current", "plots", "plot_hypothesis.R"))
+
+
+
+# 1. Specify a vector of target lambda scenarios
+target_lambdas <- c(0.1) 
+
+# read data
+results_df <- read_csv(here("current", "outputs", "tables", "final_results_complete.csv")) %>%
+  dplyr::mutate(lambda = as.numeric(lambda))
+#data_plot <- readRDS(here("current", "outputs", "tables", #"final_weight_distribution_analysis.rds"))
+#setDT(data_plot)
+
+# Isolate the older patient stratum (>=65) at the 7-year horizon
+#df_7yr_older <- data_plot[horizon_years == 7 & pp_age_class == ">=65"]
+
+
+batch_code <- readLines(here("current", "main_batch.R"))
+
+get_param <- function(param_name, code = batch_code) {
+  line <- code[str_detect(code, paste0("^", param_name, "\\s*<-"))]
+  if(length(line) > 0) {
+    # Extract everything after <- and strip comments/whitespace
+    val <- str_match(line, paste0("^", param_name, "\\s*<-\\s*([^#]+)"))[2]
+    return(str_trim(val))
+  }
+  return("Not found")
+}
+
+# Store parameters in a list
+params_list <- list(
+  n_patients     = get_param("n_patients"),
+  age_option     = get_param("age_option"),
+  beta_age       = get_param("beta_age"),
+  beta_sex       = get_param("beta_sex"),
+  year_min       = get_param("year.start_min"),
+  year_max       = get_param("year.start_max"),
+  prop_female    = get_param("prop_female"),
+  N_files        = get_param("N_files"),
+  max_time       = get_param("max_time")
+)
+
+```
+## Simulation Configuration
+
+> **Note:** This report reflects the performance metrics evaluated for the following simulation configuration:
+
+* **Number of Patients ($N$):** `r params_list$n_patients`
+* **Simulated Cohorts (Files):** `r params_list$N_files`
+* **Follow-up Cutoff (Years):** `r params_list$max_time` years
+* **Age Distribution Cohort:** `r params_list$age_option`
+* **Beta Coefficients:** * Age ($\beta_{age}$): `r params_list$beta_age`
+    * Sex ($\beta_{sex}$): `r params_list$beta_sex`
+* **Inclusion Window:** `r params_list$year_min` to `r params_list$year_max`
+* **Female Proportion:** `r params_list$prop_female`
+
+```{r}
+plot_bias_by_age(
+  results_df   = results_df,
+  title        = "PPE Bias Under Competing Risks by Age Class",
+  followup_lab = "Follow-up"
+)
+
+#print(bias_plot)
+```
+
+```{r}
+plot_ecr_by_age(
+  results_df   = results_df,
+  title        = "PPE ECR Under Competing Risks by Age Class",
+  followup_lab = "Follow-up"
+)
+
+#print(bias_plot)
+```
+
+```{r}
+plot_mean_se_by_age(
+  results_df   = results_df,
+  title        = "PPE Mean Estimated SE Under Competing Risks by Age Class",
+  followup_lab = "Follow-up"
+)
+```
+
+```{r}
+plot_estimate_sd_by_age(
+  results_df   = results_df,
+  title        = "PPE Empirical Dispersion (Estimate SD) Under Competing Risks by Age Class",
+  followup_lab = "Follow-up"
+)
+```
+
+```{r}
+# plot_se_calibration_ratio_by_age(
+#   results_df   = results_df,
+#   title        = "PPE Empirical Dispersion (Estimate SD) Under Competing Risks by Age Class",
+#   followup_lab = "Follow-up"
+# )
+```
+
+## Pohar-Perme Visualization by Lambda Scenario age strata-specific overlay
+
+```{r}
+#| label: ppviz-age-strata-precompute
+#| include: false
+
+save_dir <- here("current", "outputs", "plots_data_age_strata")
+
+# Build exact filenames without padding
+target_filenames <- paste0("ppviz_age_strata_lambda_", as.character(target_lambdas), ".rds")
+target_file_paths <- file.path(save_dir, target_filenames)
+
+missing_files <- target_lambdas[!file.exists(target_file_paths)]
+
+if (length(missing_files) > 0) {
+  message("Pre-computed plots missing for lambdas: ", paste(missing_files, collapse = ", "), ". Running pre-computation...")
+  
+  results_df <- results_df %>% 
+    dplyr::filter(lambda %in% target_lambdas)
+  
+  source(here("current", "plots", "age_stratified_estimate_plots", "precompute_viz_data_age_strata.R")) 
+} else {
+  message("Pre-computed data for all targeted lambdas already exists. Skipping pre-computation step.")
+}
+```
+
+```{r}
+#| label: fig-ppviz-age-strata-multiple-lambdas
+#| fig.width: 9
+#| fig.height: 6
+#| fig.cap: "Age-Stratified Pohar-Perme versus theoretical net survival for selected lambda scenarios."
+#| layout-ncol: 1
+
+# 4. Loop through the specific file paths you defined above
+for (file_path in target_file_paths) {
+  if (!file.exists(file_path)) {
+    warning("Warning: Pre-computed .rds plot file not found at ", file_path)
+    next # Skip to the next file if one is somehow missing
+  }
+  
+  p_data <- readRDS(file_path)
+  
+  # Extract and print the ggplot object
+  print(p_data$plot_obj)
+}
+```
+
+
+## Cumulative Representations by Age Strata
+```{r}
+plot_cum_cancer_prop_by_age(results_df)
+```
+
+```{r}
+plot_cum_cancer_by_age(results_df)
+```
+
+```{r}
+plot_n_at_risk_prop_by_age(results_df)
+```
+
+```{r}
+plot_n_at_risk_by_age(results_df)
+```
+
+```{r}
+plot_cum_total_deaths_prop_by_age(results_df)
+```
+
+```{r}
+plot_cum_total_deaths_by_age(results_df)
+```
+
+```{r}
+plot_cum_other_prop_by_age(results_df)
+```
+
+```{r}
+plot_cum_other_by_age(results_df)
+```
+)
+
+## Empirical SD vs Number at Risk
+```{r}
+plot_sd_vs_risk_age_strata(results_df)
+```
+
+## Case 1: Weights and Risk-Set Size
+
+```{r}
+#| fig-width: 9
+#| fig-height: 12
+# Calls function and renders directly in document; saves PNG
+# plot_case1_weights_and_riskset(
+#   data = data_plot,
+#   target_horizon = 7,
+#   target_age_class = ">=65",
+#   save_path = here("current", "outputs", "plot_case1_weights_and_riskset.png")
+# )
+```
+
+## Case 2: Survivor Age Profiles
+
+```{r}
+# plot_case2_survivor_age_profiles(
+#   data = data_plot,
+#   target_horizon = 7,
+#   target_age_class = ">=65",
+#   save_path = here("current", "outputs", "plot_case2_survivor_age_percentiles.png")
+# )
+```
